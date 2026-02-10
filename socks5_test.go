@@ -293,6 +293,90 @@ func TestConnect_UnsupportedCommand(t *testing.T) {
 	}
 }
 
+func TestConnect_BlockMetadataIPv4(t *testing.T) {
+	proxyAddr := startTestServerWithBlockMetadata(t)
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	socks5Handshake(t, conn)
+
+	// Try to connect to metadata endpoint 169.254.169.254:80
+	rep := socks5ConnectIPv4(t, conn, net.ParseIP("169.254.169.254"), 80)
+	if rep != repConnectionNotAllowed {
+		t.Errorf("expected reply 0x%02x (connection not allowed), got 0x%02x", repConnectionNotAllowed, rep)
+	}
+}
+
+func TestConnect_BlockMetadataLinkLocal(t *testing.T) {
+	proxyAddr := startTestServerWithBlockMetadata(t)
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	socks5Handshake(t, conn)
+
+	// Any link-local address in 169.254.0.0/16 should be blocked
+	rep := socks5ConnectIPv4(t, conn, net.ParseIP("169.254.1.1"), 80)
+	if rep != repConnectionNotAllowed {
+		t.Errorf("expected reply 0x%02x (connection not allowed), got 0x%02x", repConnectionNotAllowed, rep)
+	}
+}
+
+func TestConnect_AllowNonMetadata(t *testing.T) {
+	proxyAddr := startTestServerWithBlockMetadata(t)
+	echoAddr := startEchoServer(t)
+	echoTCPAddr, _ := net.ResolveTCPAddr("tcp", echoAddr)
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	socks5Handshake(t, conn)
+
+	// 127.0.0.1 should still be allowed
+	rep := socks5ConnectIPv4(t, conn, net.ParseIP("127.0.0.1"), uint16(echoTCPAddr.Port))
+	if rep != repSuccess {
+		t.Fatalf("expected success reply, got 0x%02x", rep)
+	}
+}
+
+func startTestServerWithBlockMetadata(t *testing.T) (addr string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	srv := &Server{
+		Timeout:       5 * time.Second,
+		IdleTimeout:   5 * time.Second,
+		BlockMetadata: true,
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go srv.handleConnection(conn)
+		}
+	}()
+
+	return ln.Addr().String()
+}
+
 func TestConnect_ConnectionRefused(t *testing.T) {
 	proxyAddr := startTestServer(t)
 
