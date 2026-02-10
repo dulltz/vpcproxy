@@ -16,6 +16,8 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - run: go install golang.org/x/tools/cmd/goimports@latest
+
       - run: make fmt-check
 
       - run: make vet

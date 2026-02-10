@@ -13,7 +13,7 @@ vet:
 	go vet ./...
 
 fmt-check:
-	test -z "$$(gofmt -l .)"
+	test -z "$$(goimports -l .)"
 
 clean:
 	rm -f $(BINARY)
