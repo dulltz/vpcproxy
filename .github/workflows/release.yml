@@ -36,7 +36,7 @@ jobs:
         run: go build -o vpcproxy-${{ matrix.goos }}-${{ matrix.goarch }} .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vpcproxy-${{ matrix.goos }}-${{ matrix.goarch }}
           path: vpcproxy-${{ matrix.goos }}-${{ matrix.goarch }}
