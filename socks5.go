@@ -35,9 +35,10 @@ const (
 
 // Server is a SOCKS5 proxy server.
 type Server struct {
-	Timeout     time.Duration
-	IdleTimeout time.Duration
-	Logger      *slog.Logger
+	Timeout       time.Duration
+	IdleTimeout   time.Duration
+	BlockMetadata bool
+	Logger        *slog.Logger
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
@@ -121,6 +122,40 @@ func (s *Server) handleConnect(conn net.Conn, logger *slog.Logger) {
 	}
 
 	logger = logger.With("target", addr)
+
+	// Validate destination address
+	if s.BlockMetadata {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			logger.Debug("invalid address", "error", err)
+			s.sendReply(conn, repConnectionNotAllowed, nil)
+			return
+		}
+
+		if ip := net.ParseIP(host); ip != nil {
+			if isBlockedIP(ip) {
+				logger.Info("blocked connection to metadata endpoint", "target", addr)
+				s.sendReply(conn, repConnectionNotAllowed, nil)
+				return
+			}
+		} else {
+			// Resolve domain name and check resolved IPs
+			ips, err := net.LookupHost(host)
+			if err != nil {
+				logger.Debug("dns lookup failed", "error", err)
+				s.sendReply(conn, repHostUnreachable, nil)
+				return
+			}
+			for _, ipStr := range ips {
+				if ip := net.ParseIP(ipStr); ip != nil && isBlockedIP(ip) {
+					logger.Info("blocked connection to metadata endpoint (resolved)", "target", addr, "resolved", ipStr)
+					s.sendReply(conn, repConnectionNotAllowed, nil)
+					return
+				}
+			}
+		}
+	}
+
 	logger.Info("connecting")
 
 	// Dial target
@@ -209,6 +244,16 @@ func (s *Server) sendReply(conn net.Conn, rep byte, bindAddr *net.TCPAddr) {
 	}
 
 	conn.Write(reply)
+}
+
+// metadataNet is the link-local subnet containing cloud metadata endpoints.
+var metadataNet = func() *net.IPNet {
+	_, n, _ := net.ParseCIDR("169.254.0.0/16")
+	return n
+}()
+
+func isBlockedIP(ip net.IP) bool {
+	return metadataNet.Contains(ip)
 }
 
 func errorToReply(err error) byte {

@@ -17,6 +17,8 @@ func main() {
 	logLevel := flag.String("log-level", "info", "log level (debug/info/warn/error)")
 	timeout := flag.Duration("timeout", 30*time.Second, "dial timeout")
 	idleTimeout := flag.Duration("idle-timeout", 5*time.Minute, "idle timeout")
+	maxConns := flag.Int("max-connections", 1024, "maximum number of concurrent connections")
+	blockMetadata := flag.Bool("block-metadata", true, "block connections to cloud metadata endpoints (169.254.169.254)")
 	flag.Parse()
 
 	// Setup logger
@@ -36,9 +38,10 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
 	srv := &Server{
-		Timeout:     *timeout,
-		IdleTimeout: *idleTimeout,
-		Logger:      logger,
+		Timeout:       *timeout,
+		IdleTimeout:   *idleTimeout,
+		BlockMetadata: *blockMetadata,
+		Logger:        logger,
 	}
 
 	// Listen
@@ -55,8 +58,14 @@ func main() {
 
 	var wg sync.WaitGroup
 
+	sem := make(chan struct{}, *maxConns)
+
 	// Accept loop
 	go func() {
+		var backoff time.Duration
+		const backoffInit = 5 * time.Millisecond
+		const backoffMax = 1 * time.Second
+
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
@@ -64,13 +73,28 @@ func main() {
 				case <-ctx.Done():
 					return
 				default:
-					logger.Error("accept failed", "error", err)
+					if backoff == 0 {
+						backoff = backoffInit
+					} else {
+						backoff *= 2
+						if backoff > backoffMax {
+							backoff = backoffMax
+						}
+					}
+					logger.Error("accept failed", "error", err, "backoff", backoff)
+					time.Sleep(backoff)
 					continue
 				}
 			}
+			backoff = 0
+
+			sem <- struct{}{}
 			wg.Add(1)
 			go func() {
-				defer wg.Done()
+				defer func() {
+					<-sem
+					wg.Done()
+				}()
 				srv.handleConnection(conn)
 			}()
 		}
