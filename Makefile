@@ -4,7 +4,7 @@ MODULE := github.com/dulltz/vpcproxy
 .PHONY: build test vet fmt-check clean
 
 build:
-	go build -o $(BINARY) .
+	CGO_ENABLED=0 go build -o $(BINARY) .
 
 test:
 	go test -race -shuffle=on -v ./...
