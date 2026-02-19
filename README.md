@@ -5,6 +5,7 @@ A minimal SOCKS5 proxy server written in Go with zero external dependencies.
 ## Features
 
 - SOCKS5 CONNECT command (RFC 1928)
+- SOCKS5 username/password authentication (RFC 1929)
 - IPv4, IPv6, and domain name address types
 - Idle timeout on relayed connections
 - Graceful shutdown (SIGINT/SIGTERM)
@@ -37,6 +38,15 @@ vpcproxy [flags]
 | `-block-metadata` | `true` | Block connections to cloud metadata endpoints (`169.254.0.0/16`) |
 | `-log-level` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `VPCPROXY_USERNAME` | Username for SOCKS5 authentication. Must be set together with `VPCPROXY_PASSWORD`. |
+| `VPCPROXY_PASSWORD` | Password for SOCKS5 authentication. Must be set together with `VPCPROXY_USERNAME`. |
+
+When both variables are set, the server requires username/password authentication (RFC 1929). When both are unset, the server runs without authentication (backward compatible).
+
 ### Example
 
 ```
@@ -47,6 +57,13 @@ Test with curl:
 
 ```
 curl -x socks5h://127.0.0.1:1080 https://example.com
+```
+
+With authentication:
+
+```
+VPCPROXY_USERNAME=user VPCPROXY_PASSWORD=pass vpcproxy -listen 0.0.0.0:1080
+curl -x socks5h://user:pass@127.0.0.1:1080 https://example.com
 ```
 
 ## Development
