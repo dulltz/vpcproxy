@@ -377,6 +377,165 @@ func startTestServerWithBlockMetadata(t *testing.T) (addr string) {
 	return ln.Addr().String()
 }
 
+func startTestServerWithAuth(t *testing.T, username, password string) (addr string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	srv := &Server{
+		Timeout:     5 * time.Second,
+		IdleTimeout: 5 * time.Second,
+		Username:    username,
+		Password:    password,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go srv.handleConnection(conn)
+		}
+	}()
+
+	return ln.Addr().String()
+}
+
+// socks5HandshakeUserPass performs the SOCKS5 handshake with username/password auth.
+func socks5HandshakeUserPass(t *testing.T, conn net.Conn, username, password string) {
+	t.Helper()
+	// Send: VER=5, NMETHODS=1, METHOD=0x02 (USERNAME/PASSWORD)
+	_, err := conn.Write([]byte{0x05, 0x01, 0x02})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp[0] != 0x05 || resp[1] != 0x02 {
+		t.Fatalf("unexpected handshake response: %v", resp)
+	}
+
+	// Send username/password subnegotiation
+	auth := []byte{0x01, byte(len(username))}
+	auth = append(auth, []byte(username)...)
+	auth = append(auth, byte(len(password)))
+	auth = append(auth, []byte(password)...)
+	if _, err := conn.Write(auth); err != nil {
+		t.Fatal(err)
+	}
+
+	authResp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, authResp); err != nil {
+		t.Fatal(err)
+	}
+	if authResp[0] != 0x01 || authResp[1] != 0x00 {
+		t.Fatalf("auth failed: %v", authResp)
+	}
+}
+
+func TestAuth_Success(t *testing.T) {
+	proxyAddr := startTestServerWithAuth(t, "user", "pass")
+	echoAddr := startEchoServer(t)
+	echoTCPAddr, _ := net.ResolveTCPAddr("tcp", echoAddr)
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	socks5HandshakeUserPass(t, conn, "user", "pass")
+	rep := socks5ConnectIPv4(t, conn, net.ParseIP("127.0.0.1"), uint16(echoTCPAddr.Port))
+	if rep != repSuccess {
+		t.Fatalf("expected success reply, got 0x%02x", rep)
+	}
+
+	msg := []byte("hello auth")
+	conn.Write(msg)
+
+	buf := make([]byte, len(msg))
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != string(msg) {
+		t.Errorf("expected %q, got %q", msg, buf)
+	}
+}
+
+func TestAuth_WrongPassword(t *testing.T) {
+	proxyAddr := startTestServerWithAuth(t, "user", "pass")
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Send: VER=5, NMETHODS=1, METHOD=0x02
+	conn.Write([]byte{0x05, 0x01, 0x02})
+
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp[1] != 0x02 {
+		t.Fatalf("expected method 0x02, got 0x%02x", resp[1])
+	}
+
+	// Send wrong password
+	auth := []byte{0x01, 0x04}
+	auth = append(auth, []byte("user")...)
+	auth = append(auth, 0x05)
+	auth = append(auth, []byte("wrong")...)
+	conn.Write(auth)
+
+	authResp := make([]byte, 2)
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadFull(conn, authResp); err != nil {
+		t.Fatal(err)
+	}
+	if authResp[0] != 0x01 {
+		t.Errorf("expected auth version 0x01, got 0x%02x", authResp[0])
+	}
+	if authResp[1] != 0x01 {
+		t.Errorf("expected auth failure 0x01, got 0x%02x", authResp[1])
+	}
+}
+
+func TestAuth_NoAuthMethodRejected(t *testing.T) {
+	proxyAddr := startTestServerWithAuth(t, "user", "pass")
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Send: VER=5, NMETHODS=1, METHOD=0x00 (NO AUTH only)
+	conn.Write([]byte{0x05, 0x01, 0x00})
+
+	resp := make([]byte, 2)
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp[0] != 0x05 {
+		t.Errorf("expected version 5, got %d", resp[0])
+	}
+	if resp[1] != 0xFF {
+		t.Errorf("expected method 0xFF (NO ACCEPTABLE), got 0x%02x", resp[1])
+	}
+}
+
 func TestConnect_ConnectionRefused(t *testing.T) {
 	proxyAddr := startTestServer(t)
 

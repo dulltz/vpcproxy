@@ -37,10 +37,19 @@ func main() {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
+	username := os.Getenv("VPCPROXY_USERNAME")
+	password := os.Getenv("VPCPROXY_PASSWORD")
+	if (username == "") != (password == "") {
+		logger.Error("both VPCPROXY_USERNAME and VPCPROXY_PASSWORD must be set, or both unset")
+		os.Exit(1)
+	}
+
 	srv := &Server{
 		Timeout:       *timeout,
 		IdleTimeout:   *idleTimeout,
 		BlockMetadata: *blockMetadata,
+		Username:      username,
+		Password:      password,
 		Logger:        logger,
 	}
 
@@ -50,7 +59,11 @@ func main() {
 		logger.Error("listen failed", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("listening", "addr", ln.Addr())
+	if srv.requireAuth() {
+		logger.Info("listening", "addr", ln.Addr(), "auth", "username/password")
+	} else {
+		logger.Info("listening", "addr", ln.Addr(), "auth", "none")
+	}
 
 	// Graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
