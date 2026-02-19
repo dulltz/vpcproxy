@@ -423,6 +423,14 @@ func socks5HandshakeUserPass(t *testing.T, conn net.Conn, username, password str
 		t.Fatalf("unexpected handshake response: %v", resp)
 	}
 
+	// Validate RFC 1929 length limits
+	if len(username) == 0 || len(username) > 255 {
+		t.Fatalf("username length %d out of RFC 1929 range (1-255)", len(username))
+	}
+	if len(password) == 0 || len(password) > 255 {
+		t.Fatalf("password length %d out of RFC 1929 range (1-255)", len(password))
+	}
+
 	// Send username/password subnegotiation
 	auth := []byte{0x01, byte(len(username))}
 	auth = append(auth, []byte(username)...)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
@@ -153,8 +154,14 @@ func (s *Server) authenticateUserPass(conn net.Conn) error {
 		return fmt.Errorf("read password: %w", err)
 	}
 
-	userOK := subtle.ConstantTimeCompare(uname, []byte(s.Username)) == 1
-	passOK := subtle.ConstantTimeCompare(passwd, []byte(s.Password)) == 1
+	// Hash before comparing to ensure constant-time regardless of length differences.
+	// subtle.ConstantTimeCompare returns immediately when lengths differ.
+	gotUser := sha256.Sum256(uname)
+	wantUser := sha256.Sum256([]byte(s.Username))
+	gotPass := sha256.Sum256(passwd)
+	wantPass := sha256.Sum256([]byte(s.Password))
+	userOK := subtle.ConstantTimeCompare(gotUser[:], wantUser[:]) == 1
+	passOK := subtle.ConstantTimeCompare(gotPass[:], wantPass[:]) == 1
 	if userOK && passOK {
 		_, err := conn.Write([]byte{authUserPassVer, authUserPassSuccess})
 		return err
